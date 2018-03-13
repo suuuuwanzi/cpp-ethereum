@@ -18,7 +18,12 @@
  * @author Alex Leverington <nessence@gmail.com>
  * @date 2014
  */
+/*
+是以太坊P2P网络的关键类，所有与邻居节点相关的数据和方法均由NodeTable类实现
 
+
+邻居节点是指加入到K桶，并通过PING-PONG握手的节点
+*/
 #include "NodeTable.h"
 using namespace std;
 using namespace dev;
@@ -40,6 +45,17 @@ const char* NodeTableIngress::name() { return "<<P"; }
 
 NodeEntry::NodeEntry(NodeID const& _src, Public const& _pubk, NodeIPEndpoint const& _gw): Node(_pubk, _gw), distance(NodeTable::distance(_src, _pubk)) {}
 
+
+/*
+成员: m_node   本节点，包含NodeId、endpoint、ip等
+	  m_state   K桶，包含邻居节点的NodeId、distance、endpoint、ip
+	  m_nodes  已知的节点信息，但并没有加入到K桶
+
+ Constructor requiring host for I/O, credentials, and IP Address and port to listen on.
+
+
+
+*/
 NodeTable::NodeTable(ba::io_service& _io, KeyPair const& _alias, NodeIPEndpoint const& _endpoint, bool _enabled):
 	m_node(Node(_alias.pub(), _endpoint)),
 	m_secret(_alias.secret()),
@@ -77,15 +93,18 @@ void NodeTable::processEvents()
 		m_nodeEventHandler->processEvents();
 }
 
+//将节点加入m_nodes（已知的节点信息，但并没有加入到K桶），并发起ping握手
 shared_ptr<NodeEntry> NodeTable::addNode(Node const& _node, NodeRelation _relation)
 {
+	//连接已知的情况
 	if (_relation == Known)
 	{
+		// m_node 本节点，_node 实参
 		auto ret = make_shared<NodeEntry>(m_node.id, _node.id, _node.endpoint);
-		ret->pending = false;
+		ret->pending = false; // Get the list of pending transactions
 		DEV_GUARDED(x_nodes)
-			m_nodes[_node.id] = ret;
-		noteActiveNode(_node.id, _node.endpoint);
+			m_nodes[_node.id] = ret;  // m_nodes[_node.id] =ret ;
+		noteActiveNode(_node.id, _node.endpoint);  //将新节点加入到K桶
 		return ret;
 	}
 	
@@ -152,6 +171,7 @@ shared_ptr<NodeEntry> NodeTable::nodeEntry(NodeID _id)
 	return m_nodes.count(_id) ? m_nodes[_id] : shared_ptr<NodeEntry>();
 }
 
+//底层发现函数，从k桶中选出节点，发送FINDNODE命令
 void NodeTable::doDiscover(NodeID _node, unsigned _round, shared_ptr<set<shared_ptr<NodeEntry>>> _tried)
 {
 	// NOTE: ONLY called by doDiscovery!
@@ -214,6 +234,8 @@ void NodeTable::doDiscover(NodeID _node, unsigned _round, shared_ptr<set<shared_
 	});
 }
 
+
+//从K桶中选出节点
 vector<shared_ptr<NodeEntry>> NodeTable::nearestNodeEntries(NodeID _target)
 {
 	// send s_alpha FindNode packets to nodes we know, closest to target
@@ -323,6 +345,7 @@ void NodeTable::evict(shared_ptr<NodeEntry> _leastSeen, shared_ptr<NodeEntry> _n
 	ping(_leastSeen.get());
 }
 
+//将新节点加入到K桶
 void NodeTable::noteActiveNode(Public const& _pubk, bi::udp::endpoint const& _endpoint)
 {
 	if (_pubk == m_node.address() || !NodeIPEndpoint(_endpoint.address(), _endpoint.port(), _endpoint.port()).isAllowed())
@@ -395,6 +418,7 @@ NodeTable::NodeBucket& NodeTable::bucket_UNSAFE(NodeEntry const* _n)
 	return m_state[_n->distance - 1];
 }
 
+//Kad协议处理
 void NodeTable::onReceived(UDPSocketFace*, bi::udp::endpoint const& _from, bytesConstRef _packet)
 {
 	try {
@@ -567,6 +591,7 @@ void NodeTable::doCheckEvictions()
 	});
 }
 
+//具体发现函数
 void NodeTable::doDiscovery()
 {
 	m_timers.schedule(c_bucketRefresh.count(), [this](boost::system::error_code const& _ec)
